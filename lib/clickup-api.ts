@@ -694,8 +694,8 @@ async function createChecklist(
   const checklistResponse = await api.post(`/task/${taskId}/checklist`, {
     name: title
   });
-  const checklist = checklistResponse.data.checklist;
-
+          const checklist = checklistResponse.data.checklist;
+          
   // Add items with small delays to avoid rate limiting
   for (let i = 0; i < items.length; i++) {
     if (i > 0 && i % 5 === 0) {
@@ -703,7 +703,7 @@ async function createChecklist(
       await rateLimitDelay(200);
     }
     
-    await api.post(`/checklist/${checklist.id}/checklist_item`, {
+            await api.post(`/checklist/${checklist.id}/checklist_item`, {
       name: items[i],
       orderindex: i,
       resolved: false

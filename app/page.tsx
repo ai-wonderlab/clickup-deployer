@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useSession, signOut } from 'next-auth/react';
 import { useDropzone } from 'react-dropzone';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
@@ -21,6 +22,7 @@ interface TemplateMetadata {
 }
 
 export default function Home() {
+  const { data: session, status } = useSession();
   const [template, setTemplate] = useState<any>(null);
   const [apiToken, setApiToken] = useState('');
   const [templateListId, setTemplateListId] = useState('');
@@ -291,12 +293,43 @@ export default function Home() {
     }
   };
 
+  if (status === "loading") {
+    return (
+      <div className="min-h-screen bg-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-white flex flex-col">
       {/* Header */}
       <div className="border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 text-center">
-          <h1 className="text-2xl font-semibold text-gray-900">ClickUp Deployer</h1>
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className="flex justify-between items-center">
+            <h1 className="text-2xl font-semibold text-gray-900">ClickUp Deployer</h1>
+            <div className="flex items-center space-x-4">
+              {session?.user && (
+                <div className="flex items-center space-x-3">
+                  <img 
+                    src={session.user.image || ''} 
+                    alt={session.user.name || ''} 
+                    className="w-8 h-8 rounded-full"
+                  />
+                  <span className="text-sm text-gray-600">{session.user.email}</span>
+                  <button
+                    onClick={() => signOut()}
+                    className="text-sm text-red-600 hover:text-red-800"
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
           <p className="mt-1 text-sm text-gray-500">Automated template deployment system</p>
         </div>
       </div>
