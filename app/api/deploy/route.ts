@@ -82,7 +82,8 @@ export async function POST(request: NextRequest) {
       { 
         stopOnMissingFields: stopOnMissingFields || false,
         delayBetweenCalls: delayBetweenCalls || 500,
-        enableRollback: true  // Enable cleanup on failure
+        enableRollback: true,  // Enable cleanup on failure
+        createNewListIfNeeded: true
       }
     );
 
