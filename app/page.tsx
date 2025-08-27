@@ -49,13 +49,13 @@ export default function Home() {
   // Load API token and template list ID from environment or localStorage
   useEffect(() => {
     // Auto-fill API token from environment variable
-    const envApiToken = process.env.CLICKUP_API_TOKEN;
+    const envApiToken = process.env.NEXT_PUBLIC_CLICKUP_API_TOKEN;
     if (envApiToken) {
       setApiToken(envApiToken);
     }
 
     // Load template list ID from environment or localStorage
-    const envListId = process.env.CLICKUP_TEMPLATE_LIST_ID;
+    const envListId = process.env.NEXT_PUBLIC_TEMPLATE_LIST_ID;
     const savedListId = localStorage.getItem('templateListId');
     
     if (envListId) {
