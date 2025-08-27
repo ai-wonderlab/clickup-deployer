@@ -1,0 +1,81 @@
+{
+  "meta": {
+    "slug": "comprehensive_template",
+    "version": "2.0.0",
+    "description": "Demonstrates all template capabilities"
+  },
+  "destination": {
+    "list_id": "901514485351"
+  },
+  "defaults": {
+    "status": "to do",
+    "priority": 3,
+    "tags": ["template", "automated"],
+    "custom_fields": {
+      "Client Name": "Default Client"
+    }
+  },
+  "roles_map": {
+    "Manager": "manager@company.com",
+    "Developer": "dev@company.com",
+    "Designer": "design@company.com"
+  },
+  "phases": [
+    {
+      "key": "P1",
+      "name": "Phase with everything",
+      "description": "Has all possible fields",
+      "assignee_role": "Manager",
+      "start_date": "2025-02-01",
+      "due_date": "2025-02-15",
+      "status": "in progress",
+      "priority": 1,
+      "tags": ["urgent", "phase1"],
+      "custom_fields": {
+        "Client Name": "Override Client",
+        "Process Date": "2025-02-01"
+      },
+      "actions": [
+        {
+          "name": "Full action example",
+          "description": "Uses all fields",
+          "assignee_role": "Developer",
+          "start_date": "2025-02-01T09:00:00",
+          "due_date": "2025-02-02T17:00:00",
+          "status": "to do",
+          "priority": 2,
+          "tags": ["development"],
+          "watchers": ["manager@company.com", "design@company.com"],
+          "custom_fields": {
+            "Role": "Backend Dev"
+          },
+          "checklist": {
+            "title": "Development Steps",
+            "items": ["Setup environment", "Write code", "Test"]
+          }
+        },
+        {
+          "name": "Minimal action",
+          "description": "Only required fields"
+        }
+      ]
+    },
+    {
+      "key": "P2",
+      "name": "Minimal phase",
+      "actions": []
+    },
+    {
+      "key": "P3",
+      "name": "Phase without assignee",
+      "description": "No role mapping",
+      "priority": 2,
+      "actions": [
+        {
+          "name": "Action without checklist",
+          "tags": ["simple"]
+        }
+      ]
+    }
+  ]
+}
