@@ -13,8 +13,11 @@ export interface TemplateSchema {
   };
   destination: {
     space_id?: string;
+    space_name?: string;
     folder_id?: string;
+    folder_name?: string;
     list_id?: string;
+    list_name?: string;
   };
   defaults?: {
     status?: string;
@@ -101,6 +104,79 @@ export async function deployTemplateSmartly(
     }
   });
 
+  // Function to resolve space name to space ID
+  async function resolveSpaceId(teamId: string, spaceName: string): Promise<string> {
+    try {
+      console.log(`🔍 Searching for space: "${spaceName}"`);
+      const response = await api.get(`/team/${teamId}/space`);
+      const spaces = response.data.spaces;
+      
+      const matchingSpace = spaces.find((space: any) => 
+        space.name.toLowerCase() === spaceName.toLowerCase()
+      );
+      
+      if (matchingSpace) {
+        console.log(`✅ Found space: "${matchingSpace.name}" (${matchingSpace.id})`);
+        return matchingSpace.id;
+      } else {
+        const availableSpaces = spaces.map((s: any) => s.name).join(', ');
+        throw new Error(`Space "${spaceName}" not found. Available spaces: ${availableSpaces}`);
+      }
+    } catch (error: any) {
+      console.error(`❌ Failed to resolve space name "${spaceName}":`, error.response?.data || error.message);
+      throw new Error(`Failed to find space "${spaceName}": ${error.response?.data?.err || error.message}`);
+    }
+  }
+
+  // Function to resolve folder name to folder ID
+  async function resolveFolderId(spaceId: string, folderName: string): Promise<string> {
+    try {
+      console.log(`🔍 Searching for folder: "${folderName}" in space ${spaceId}`);
+      const response = await api.get(`/space/${spaceId}/folder`);
+      const folders = response.data.folders;
+      
+      const matchingFolder = folders.find((folder: any) => 
+        folder.name.toLowerCase() === folderName.toLowerCase()
+      );
+      
+      if (matchingFolder) {
+        console.log(`✅ Found folder: "${matchingFolder.name}" (${matchingFolder.id})`);
+        return matchingFolder.id;
+      } else {
+        const availableFolders = folders.map((f: any) => f.name).join(', ');
+        throw new Error(`Folder "${folderName}" not found in space. Available folders: ${availableFolders}`);
+      }
+    } catch (error: any) {
+      console.error(`❌ Failed to resolve folder name "${folderName}":`, error.response?.data || error.message);
+      throw new Error(`Failed to find folder "${folderName}": ${error.response?.data?.err || error.message}`);
+    }
+  }
+
+  // Function to resolve list name to list ID
+  async function resolveListId(parentId: string, parentType: 'space' | 'folder', listName: string): Promise<string> {
+    try {
+      console.log(`🔍 Searching for list: "${listName}" in ${parentType} ${parentId}`);
+      const endpoint = parentType === 'space' ? `/space/${parentId}/list` : `/folder/${parentId}/list`;
+      const response = await api.get(endpoint);
+      const lists = response.data.lists;
+      
+      const matchingList = lists.find((list: any) => 
+        list.name.toLowerCase() === listName.toLowerCase()
+      );
+      
+      if (matchingList) {
+        console.log(`✅ Found list: "${matchingList.name}" (${matchingList.id})`);
+        return matchingList.id;
+      } else {
+        const availableLists = lists.map((l: any) => l.name).join(', ');
+        throw new Error(`List "${listName}" not found in ${parentType}. Available lists: ${availableLists}`);
+      }
+    } catch (error: any) {
+      console.error(`❌ Failed to resolve list name "${listName}":`, error.response?.data || error.message);
+      throw new Error(`Failed to find list "${listName}": ${error.response?.data?.err || error.message}`);
+    }
+  }
+
   const result: DeploymentResult = {
     success: false,
     mode: 'existing_list',
@@ -144,6 +220,65 @@ export async function deployTemplateSmartly(
     const userResponse = await api.get('/user');
     const username = userResponse.data.user.username;
     console.log(`✅ Connected as: ${username}`);
+
+    // Step 1.5: Resolve names to IDs if provided
+    
+    // Resolve space_name to space_id if provided
+    if (template.destination?.space_name && !template.destination?.space_id) {
+      try {
+        // Get team ID to search spaces
+        const teamResponse = await api.get('/team');
+        const teamId = teamResponse.data.teams[0].id; // Use first team
+        
+        console.log(`🔍 Resolving space name "${template.destination.space_name}" to ID...`);
+        const resolvedSpaceId = await resolveSpaceId(teamId, template.destination.space_name);
+        template.destination.space_id = resolvedSpaceId;
+        console.log(`✅ Space "${template.destination.space_name}" resolved to ID: ${resolvedSpaceId}`);
+      } catch (error: any) {
+        throw new Error(`Failed to resolve space name "${template.destination.space_name}": ${error.message}`);
+      }
+    }
+
+    // Resolve folder_name to folder_id if provided
+    if (template.destination?.folder_name && !template.destination?.folder_id) {
+      try {
+        if (!template.destination?.space_id) {
+          throw new Error('space_id or space_name is required to resolve folder_name');
+        }
+        
+        console.log(`🔍 Resolving folder name "${template.destination.folder_name}" to ID...`);
+        const resolvedFolderId = await resolveFolderId(template.destination.space_id, template.destination.folder_name);
+        template.destination.folder_id = resolvedFolderId;
+        console.log(`✅ Folder "${template.destination.folder_name}" resolved to ID: ${resolvedFolderId}`);
+      } catch (error: any) {
+        throw new Error(`Failed to resolve folder name "${template.destination.folder_name}": ${error.message}`);
+      }
+    }
+
+    // Resolve list_name to list_id if provided
+    if (template.destination?.list_name && !template.destination?.list_id) {
+      try {
+        let parentId: string;
+        let parentType: 'space' | 'folder';
+        
+        if (template.destination?.folder_id) {
+          parentId = template.destination.folder_id;
+          parentType = 'folder';
+        } else if (template.destination?.space_id) {
+          parentId = template.destination.space_id;
+          parentType = 'space';
+        } else {
+          throw new Error('space_id/space_name or folder_id/folder_name is required to resolve list_name');
+        }
+        
+        console.log(`🔍 Resolving list name "${template.destination.list_name}" to ID...`);
+        const resolvedListId = await resolveListId(parentId, parentType, template.destination.list_name);
+        template.destination.list_id = resolvedListId;
+        console.log(`✅ List "${template.destination.list_name}" resolved to ID: ${resolvedListId}`);
+      } catch (error: any) {
+        throw new Error(`Failed to resolve list name "${template.destination.list_name}": ${error.message}`);
+      }
+    }
 
     // Step 2: Determine target location
     let targetListId = template.destination?.list_id;
