@@ -217,7 +217,7 @@ export async function deployTemplateSmartly(
           {
             name: phase.name,
             description: phase.description || '',
-            status: phase.status || template.defaults?.status || 'to do',
+            // Remove status - let ClickUp use the list's default status
             priority: phase.priority || template.defaults?.priority || 3,
             tags: [...(template.defaults?.tags || []), ...(phase.tags || [])],
             assignees: resolveAssignees(phase.assignee_role, template.roles_map, userMap),
@@ -257,7 +257,7 @@ export async function deployTemplateSmartly(
                 name: action.name,
                 description: action.description || '',
                 parent: phaseTask.id, // Makes it a subtask
-                status: action.status || 'to do',
+                // Remove status - let ClickUp use the list's default status
                 priority: action.priority || 3,
                 tags: action.tags || [],
                 assignees: resolveAssignees(action.assignee_role, template.roles_map, userMap),
@@ -470,38 +470,148 @@ async function validateCustomFields(
 }
 
 async function createNewList(
-  api: AxiosInstance,
-  template: TemplateSchema
-): Promise<string> {
-  const timestamp = Date.now();
-  const listName = `${template.meta.slug}_${timestamp}`;
+    api: AxiosInstance,
+    template: TemplateSchema
+  ): Promise<string> {
+    const timestamp = Date.now();
+    const listName = `${template.meta.slug}_${timestamp}`;
   
-  const payload: any = {
-    name: listName,
-    content: template.meta.slug,
-    status: [
-      { status: 'to do', color: '#d3d3d3', orderindex: 0 },
-      { status: 'in progress', color: '#3397dd', orderindex: 1 },
-      { status: 'ready to deploy', color: '#f9d900', orderindex: 2 },
-      { status: 'complete', color: '#6bc950', orderindex: 3 }
-    ]
-  };
-
-  let response;
-  
-  if (template.destination.folder_id) {
-    // Create in folder
-    response = await api.post(`/folder/${template.destination.folder_id}/list`, payload);
+    let response;
+    
+        if (template.destination.folder_id) {
+    // Use existing folder
+    try {
+      const payload = {
+        name: listName,
+        content: template.meta.slug,
+        statuses: [
+          { status: 'to do', color: '#d3d3d3', orderindex: 0 },
+          { status: 'in progress', color: '#3397dd', orderindex: 1 },
+          { status: 'complete', color: '#6bc950', orderindex: 2 }
+        ]
+      };
+      response = await api.post(`/folder/${template.destination.folder_id}/list`, payload);
+    } catch (statusError: any) {
+      console.log('⚠️ Failed with statuses, creating simple list...');
+      const simplePayload = { name: listName, content: template.meta.slug };
+      response = await api.post(`/folder/${template.destination.folder_id}/list`, simplePayload);
+      
+      // Add statuses after creation
+      const listId = response.data.id;
+      console.log(`📋 Adding statuses to folder list ${listId}...`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      try {
+        console.log('  📌 Adding "to do" status...');
+        await api.post(`/list/${listId}/status`, { status: 'to do', color: '#d3d3d3' });
+        console.log('  ✅ "to do" status added');
+        
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        console.log('  📌 Adding "in progress" status...');
+        await api.post(`/list/${listId}/status`, { status: 'in progress', color: '#3397dd' });
+        console.log('  ✅ "in progress" status added');
+        
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        console.log('  📌 Adding "complete" status...');
+        await api.post(`/list/${listId}/status`, { status: 'complete', color: '#6bc950' });
+        console.log('  ✅ "complete" status added');
+        
+        console.log('✅ Added statuses to existing folder list');
+      } catch (err: any) {
+        console.error('❌ Failed to add statuses to folder list:', err.response?.data || err.message);
+        console.log('⚠️ Could not add statuses, using defaults');
+      }
+    }
   } else if (template.destination.space_id) {
-    // Create in space (folderless)
-    response = await api.post(`/space/${template.destination.space_id}/list`, payload);
-  } else {
-    throw new Error('No folder_id or space_id provided for new list creation');
+    // Try folderless first
+    try {
+      const payload = {
+        name: listName,
+        content: template.meta.slug,
+        statuses: [
+          { status: 'to do', color: '#d3d3d3', orderindex: 0 },
+          { status: 'in progress', color: '#3397dd', orderindex: 1 },
+          { status: 'complete', color: '#6bc950', orderindex: 2 }
+        ]
+      };
+      response = await api.post(`/space/${template.destination.space_id}/list`, payload);
+      } catch (error: any) {
+        if (error.response?.data?.ECODE === 'SUBCAT_114') {
+          console.log('⚠️ Space requires folder - creating one automatically...');
+          
+          // Create folder
+          const folderPayload = { name: `${template.meta.slug}_folder_${timestamp}` };
+          const folderResponse = await api.post(`/space/${template.destination.space_id}/folder`, folderPayload);
+          const folderId = folderResponse.data.id;
+          console.log(`📁 Created folder: ${folderPayload.name} (${folderId})`);
+          
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          // Create list WITH statuses (try different format)
+          try {
+            // Try with status array first
+            const listPayload = {
+              name: listName,
+              content: template.meta.slug,
+              statuses: [
+                { status: 'to do', color: '#d3d3d3', orderindex: 0 },
+                { status: 'in progress', color: '#3397dd', orderindex: 1 },
+                { status: 'complete', color: '#6bc950', orderindex: 2 }
+              ]
+            };
+            response = await api.post(`/folder/${folderId}/list`, listPayload);
+          } catch (statusError: any) {
+            console.log('⚠️ Failed with statuses, trying simple list creation...');
+            // Create simple list first
+            const simplePayload = {
+              name: listName,
+              content: template.meta.slug
+            };
+            response = await api.post(`/folder/${folderId}/list`, simplePayload);
+            
+            // Add statuses after list creation
+            const listId = response.data.id;
+            console.log(`📋 Adding statuses to list ${listId}...`);
+            
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Add custom statuses one by one with error handling
+            try {
+              console.log('  📌 Adding "to do" status...');
+              await api.post(`/list/${listId}/status`, { status: 'to do', color: '#d3d3d3' });
+              console.log('  ✅ "to do" status added');
+              
+              await new Promise(resolve => setTimeout(resolve, 200));
+              
+              console.log('  📌 Adding "in progress" status...');
+              await api.post(`/list/${listId}/status`, { status: 'in progress', color: '#3397dd' });
+              console.log('  ✅ "in progress" status added');
+              
+              await new Promise(resolve => setTimeout(resolve, 200));
+              
+              console.log('  📌 Adding "complete" status...');
+              await api.post(`/list/${listId}/status`, { status: 'complete', color: '#6bc950' });
+              console.log('  ✅ "complete" status added');
+              
+              console.log('✅ All custom statuses added to list');
+            } catch (err: any) {
+              console.error('❌ Failed to add custom statuses:', err.response?.data || err.message);
+              console.log('⚠️ List may only have default statuses');
+            }
+          }
+        } else {
+          throw error;
+        }
+      }
+    } else {
+      throw new Error('No folder_id or space_id provided for new list creation');
+    }
+  
+    console.log(`✅ Created new list: ${listName} (${response.data.id})`);
+    return response.data.id;
   }
-
-  console.log(`✅ Created new list: ${listName} (${response.data.id})`);
-  return response.data.id;
-}
 
 async function getTeamUserMap(api: AxiosInstance): Promise<Record<string, string>> {
   const userMap: Record<string, string> = {};
