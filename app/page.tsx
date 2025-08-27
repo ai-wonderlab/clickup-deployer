@@ -46,24 +46,33 @@ export default function Home() {
     }
   }, [logs]);
 
-  // Load API token and template list ID from environment or localStorage
+  // Load API token and template list ID securely for authenticated users
   useEffect(() => {
-    // Auto-fill API token from environment variable
-    const envApiToken = process.env.NEXT_PUBLIC_CLICKUP_API_TOKEN;
-    if (envApiToken) {
-      setApiToken(envApiToken);
-    }
+    const loadConfig = async () => {
+      try {
+        // Fetch config from secure API endpoint
+        const response = await fetch('/api/config');
+        if (response.ok) {
+          const config = await response.json();
+          if (config.apiToken) setApiToken(config.apiToken);
+          if (config.templateListId) setTemplateListId(config.templateListId);
+        } else {
+          // Fallback to localStorage for template list ID
+          const savedListId = localStorage.getItem('templateListId');
+          if (savedListId) setTemplateListId(savedListId);
+        }
+      } catch (error) {
+        console.error('Failed to load config:', error);
+        // Fallback to localStorage
+        const savedListId = localStorage.getItem('templateListId');
+        if (savedListId) setTemplateListId(savedListId);
+      }
+    };
 
-    // Load template list ID from environment or localStorage
-    const envListId = process.env.NEXT_PUBLIC_TEMPLATE_LIST_ID;
-    const savedListId = localStorage.getItem('templateListId');
-    
-    if (envListId) {
-      setTemplateListId(envListId);
-    } else if (savedListId) {
-      setTemplateListId(savedListId);
+    if (session) {
+      loadConfig();
     }
-  }, []);
+  }, [session]);
 
   // Save template list ID when changed
   useEffect(() => {
