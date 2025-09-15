@@ -37,6 +37,11 @@ export default function Home() {
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [saveMetadata, setSaveMetadata] = useState({ name: '', changelog: '' });
+  const [waitingForInput, setWaitingForInput] = useState(false);
+  const [inputPrompt, setInputPrompt] = useState('');
+  const [userInput, setUserInput] = useState('');
+  const [availableOptions, setAvailableOptions] = useState<any>({});
+  const [loadingClickUpStructure, setLoadingClickUpStructure] = useState(false);
   const terminalRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll terminal to bottom when new logs arrive
@@ -82,11 +87,11 @@ export default function Home() {
   }, [templateListId]);
 
   // Add log helper
-  const addLog = (message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info') => {
+  const addLog = (message: string, type: 'info' | 'success' | 'error' | 'warning' | 'input' = 'info') => {
     const timestamp = new Date().toLocaleTimeString();
     const hasEmoji = /^[🔐🔍✅❌📦📌📤👁⏱️🚀═]/.test(message);
-    if (hasEmoji) {
-      setLogs(prev => [...prev, `[${timestamp}] ${message}`]);
+    if (hasEmoji || type === 'input') {
+      setLogs(prev => [...prev, message === '' ? '' : `[${timestamp}] ${message}`]);
     } else {
       const prefix = {
         info: '→',
@@ -155,6 +160,210 @@ export default function Home() {
     }
   };
 
+  // Helper functions for interactive destination selection
+  const fetchSpaces = async (token: string) => {
+    try {
+      addLog('🔄 Loading available spaces...', 'info');
+      
+      const teamRes = await fetch('/api/spaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiToken: token })
+      });
+      const data = await teamRes.json();
+      const spaces = data.spaces || [];
+      
+      addLog(`✅ Found ${spaces.length} available space(s)`, 'success');
+      
+      return spaces;
+    } catch (error) {
+      addLog('❌ Failed to fetch spaces - check API token and permissions', 'error');
+      return [];
+    }
+  };
+
+  const fetchAllLists = async (token: string) => {
+    try {
+      addLog('🔄 Fetching ClickUp spaces...', 'info');
+      
+      const spacesRes = await fetch('/api/spaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiToken: token })
+      });
+      const spacesData = await spacesRes.json();
+      const spaces = spacesData.spaces || [];
+      
+      addLog(`📂 Found ${spaces.length} space(s). Loading structure...`, 'info');
+      
+      let allLists: any[] = [];
+      let failedSpaces = 0;
+      let processedSpaces = 0;
+      
+      for (const space of spaces) {
+        try {
+          processedSpaces++;
+          addLog(`🔍 [${processedSpaces}/${spaces.length}] Processing space: "${space.name}"`, 'info');
+          
+          // Get folders in space
+          let folders: any[] = [];
+          try {
+            const foldersRes = await fetch('/api/folders', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ apiToken: token, spaceId: space.id })
+            });
+            const foldersData = await foldersRes.json();
+            folders = foldersData.folders || [];
+            
+            if (folders.length > 0) {
+              addLog(`  📁 Found ${folders.length} folder(s) in "${space.name}"`, 'info');
+            }
+          } catch (error) {
+            addLog(`  ⚠️ Could not fetch folders for space "${space.name}"`, 'warning');
+          }
+          
+          // Get lists in each folder
+          let folderListCount = 0;
+          for (const folder of folders) {
+            try {
+              addLog(`  🔍 Checking folder: "${folder.name}"`, 'info');
+              
+              const listsRes = await fetch('/api/folders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ apiToken: token, folderId: folder.id, getLists: true })
+              });
+              const listsData = await listsRes.json();
+              const lists = listsData.lists || [];
+              
+              if (lists.length > 0) {
+                addLog(`    📋 Found ${lists.length} list(s) in "${folder.name}"`, 'info');
+                folderListCount += lists.length;
+                
+                // DEBUG: Log first list structure
+                if (lists[0]) {
+                  console.log('Sample folder list from API:', lists[0]);
+                  addLog(`🔍 Debug: Sample list ID = ${lists[0].id || 'undefined'}, Keys = ${Object.keys(lists[0]).join(', ')}`, 'info');
+                }
+              }
+              
+              allLists.push(...lists.map((list: any) => ({
+                ...list,
+                path: `${space.name} / ${folder.name} / ${list.name}`,
+                spaceId: space.id,
+                folderId: folder.id
+              })));
+            } catch (error) {
+              addLog(`    ⚠️ Could not fetch lists for folder "${folder.name}"`, 'warning');
+            }
+          }
+          
+          // Get folderless lists
+          let directListCount = 0;
+          try {
+            const listsRes = await fetch('/api/spaces', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ apiToken: token, spaceId: space.id, getLists: true })
+            });
+            const listsData = await listsRes.json();
+            const lists = listsData.lists || [];
+            directListCount = lists.length;
+            
+            if (lists.length > 0) {
+              addLog(`  📋 Found ${lists.length} direct list(s) in "${space.name}"`, 'info');
+              
+              // DEBUG: Log first direct list structure
+              if (lists[0]) {
+                console.log('Sample direct list from API:', lists[0]);
+                addLog(`🔍 Debug: Sample direct list ID = ${lists[0].id || 'undefined'}, Keys = ${Object.keys(lists[0]).join(', ')}`, 'info');
+              }
+            }
+            
+            allLists.push(...lists.map((list: any) => ({
+              ...list,
+              path: `${space.name} / ${list.name}`,
+              spaceId: space.id
+            })));
+          } catch (error) {
+            addLog(`  ⚠️ Could not fetch direct lists for space "${space.name}"`, 'warning');
+          }
+          
+          const spaceTotal = folderListCount + directListCount;
+          if (spaceTotal > 0) {
+            addLog(`✅ Space "${space.name}": ${spaceTotal} total lists (${allLists.length} total found so far)`, 'success');
+          } else {
+            addLog(`⚪ Space "${space.name}": No lists found`, 'info');
+          }
+          
+        } catch (error) {
+          failedSpaces++;
+          addLog(`❌ Error processing space "${space.name}"`, 'error');
+        }
+      }
+      
+      addLog('', 'info');
+      addLog(`🎯 Scan complete! Found ${allLists.length} total lists across ${spaces.length} spaces`, 'success');
+      
+      if (failedSpaces > 0) {
+        addLog(`⚠️ Note: ${failedSpaces} space(s) had errors`, 'warning');
+      }
+      
+      return allLists;
+    } catch (error) {
+      addLog('❌ Failed to fetch spaces - check API token and permissions', 'error');
+      return [];
+    }
+  };
+
+  // Fetch folders in a specific space
+  const fetchFoldersInSpace = async (spaceId: string) => {
+    try {
+      addLog('🔄 Loading folders in space...', 'info');
+      
+      const response = await fetch('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiToken, spaceId })
+      });
+      const data = await response.json();
+      const folders = data.folders || [];
+      
+      addLog(`📁 Found ${folders.length} folder(s)`, folders.length > 0 ? 'success' : 'info');
+      
+      return folders;
+    } catch (error) {
+      addLog('❌ Failed to fetch folders', 'error');
+      return [];
+    }
+  };
+
+  // Create new folder in space
+  const createNewFolder = async (spaceId: string, folderName: string) => {
+    try {
+      addLog(`🔄 Creating folder "${folderName}"...`, 'info');
+      
+      const response = await fetch('/api/folders/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiToken, spaceId, folderName })
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        addLog(`✅ Created folder: ${data.folder.name}`, 'success');
+        return data.folder;
+      } else {
+        addLog(`❌ Error creating folder: ${data.error}`, 'error');
+        return null;
+      }
+    } catch (error) {
+      addLog('❌ Failed to create folder', 'error');
+      return null;
+    }
+  };
+
   // File drop handler
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
@@ -197,6 +406,35 @@ export default function Home() {
       return;
     }
 
+    // Check if destination exists
+    if (!template.destination?.list_id && !template.destination?.space_id) {
+      // Start interactive mode in terminal
+      setIsDeploying(false);
+      setDeploymentResult(null);
+      setLogs([]);
+      setTerminalExpanded(true);
+      
+      addLog('🔍 No destination found in template', 'warning');
+      addLog('Let\'s find where to deploy this template...', 'info');
+      addLog('', 'info');
+      
+      // Fetch available options
+      setLoadingClickUpStructure(true);
+      const spaces = await fetchSpaces(apiToken);
+      const lists = await fetchAllLists(apiToken);
+      setLoadingClickUpStructure(false);
+      
+      addLog('Choose an option:', 'info');
+      addLog('[1] Create NEW list in a space/folder', 'info');
+      addLog('[2] Use EXISTING list', 'info');
+      addLog('', 'info');
+      
+      setInputPrompt('Enter choice (1-2): ');
+      setWaitingForInput(true);
+      setAvailableOptions({ mode: 'initial', spaces, lists });
+      return;
+    }
+
     setIsDeploying(true);
     setDeploymentResult(null);
     setLogs([]);
@@ -211,6 +449,108 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           template,
+          apiToken,
+          stopOnMissingFields: false,
+          delayBetweenCalls: 800,
+          selectedTemplateId
+        })
+      });
+
+      const result = await response.json();
+      
+      // TRIGGER INTERACTIVE MODE ON SPECIFIC ERRORS
+      if (!result.success && (
+        result.message?.includes('not found') ||
+        result.message?.includes('Multiple') ||
+        result.message?.includes('No matching') ||
+        result.message?.includes('List does not exist')
+      )) {
+        setIsDeploying(false);
+        setLogs([]);
+        setTerminalExpanded(true);
+        
+        addLog('❌ ' + result.message, 'error');
+        addLog('', 'info');
+        addLog('🔍 Let\'s find the correct destination...', 'warning');
+        addLog('', 'info');
+        
+        // Start interactive mode
+        setLoadingClickUpStructure(true);
+        const spaces = await fetchSpaces(apiToken);
+        const lists = await fetchAllLists(apiToken);
+        setLoadingClickUpStructure(false);
+        
+        addLog('Choose an option:', 'info');
+        addLog('[1] Create NEW list in a space/folder', 'info');
+        addLog('[2] Use EXISTING list', 'info');
+        addLog('', 'info');
+        
+        setInputPrompt('Enter choice (1-2): ');
+        setWaitingForInput(true);
+        setAvailableOptions({ mode: 'initial', spaces, lists });
+        return;
+      }
+      
+      // Continue with normal result handling...
+      setDeploymentResult(result);
+      
+      // Add backend logs to terminal
+      if (result.logs && Array.isArray(result.logs)) {
+        result.logs.forEach((log: string) => {
+          if (log.includes('✅') || log.includes('Created') || log.includes('successful')) {
+            addLog(log, 'success');
+          } else if (log.includes('❌') || log.includes('ERROR') || log.includes('Failed')) {
+            addLog(log, 'error');
+          } else if (log.includes('⚠️') || log.includes('WARN') || log.includes('warning')) {
+            addLog(log, 'warning');
+          } else {
+            addLog(log, 'info');
+          }
+        });
+      }
+      
+      // Log final results
+      if (result.success) {
+        addLog('═══════════════════════════════════════', 'info');
+        addLog(`Deployment completed successfully!`, 'success');
+        addLog(`Final stats: ${result.phases?.length || 0} phases, ${result.actions?.length || 0} actions, ${result.checklists?.length || 0} checklists`, 'success');
+        
+        // Show save as template option if uploaded from file
+        if (inputMode === 'upload' && templateListId) {
+          setShowSaveDialog(true);
+        }
+      } else {
+        addLog('═══════════════════════════════════════', 'info');
+        addLog(`Deployment failed: ${result.message}`, 'error');
+      }
+      
+    } catch (error) {
+      const errorMessage = 'Network error or server unavailable';
+      addLog(errorMessage, 'error');
+      setDeploymentResult({
+        success: false,
+        message: 'Deployment failed - check console for details',
+        errors: [errorMessage]
+      });
+    } finally {
+      setIsDeploying(false);
+    }
+  };
+
+  // Continue deployment with updated template
+  const deployWithUpdatedTemplate = async (templateToUse = template) => {
+    setIsDeploying(true);
+    setWaitingForInput(false);
+    
+    addLog('Continuing deployment...', 'info');
+    addLog(`Target destination: ${templateToUse.destination?.list_id || templateToUse.destination?.space_id}`, 'info');
+
+    try {
+      const response = await fetch('/api/deploy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          template: templateToUse, // Use the passed template
           apiToken,
           stopOnMissingFields: false,
           delayBetweenCalls: 800,
@@ -261,6 +601,277 @@ export default function Home() {
       });
     } finally {
       setIsDeploying(false);
+    }
+  };
+
+  // Handle terminal keyboard input
+  const handleTerminalInput = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && waitingForInput) {
+      const choice = userInput.trim();
+      
+      if (availableOptions.mode === 'initial') {
+        if (choice === '1') {
+          // Show spaces for new list
+          addLog(`> ${choice}`, 'input');
+          addLog('', 'info');
+          addLog('Select space for new list:', 'info');
+          
+          if (availableOptions.spaces.length === 0) {
+            addLog('No spaces available', 'error');
+            return;
+          }
+          
+          availableOptions.spaces.forEach((space: any, idx: number) => {
+            addLog(`[${idx + 1}] 🏢 ${space.name}`, 'info');
+          });
+          
+          setInputPrompt(`Select space (1-${availableOptions.spaces.length}): `);
+          setAvailableOptions({ ...availableOptions, mode: 'select_space' });
+          
+        } else if (choice === '2') {
+          // Show existing lists
+          addLog(`> ${choice}`, 'input');
+          addLog('', 'info');
+          addLog('Available Lists:', 'info');
+          
+          if (availableOptions.lists.length === 0) {
+            addLog('No lists available', 'error');
+            return;
+          }
+          
+          availableOptions.lists.forEach((list: any, idx: number) => {
+            addLog(`[${idx + 1}] 📋 ${list.path}`, 'info');
+          });
+          
+          setInputPrompt(`Select list (1-${availableOptions.lists.length}): `);
+          setAvailableOptions({ ...availableOptions, mode: 'select_list' });
+        } else {
+          // Invalid initial choice
+          addLog(`> ${choice}`, 'input');
+          addLog('Invalid choice. Please enter 1 or 2', 'error');
+          return;
+        }
+        
+      } else if (availableOptions.mode === 'select_space') {
+        const spaceIndex = parseInt(choice) - 1;
+        
+        // Input validation
+        if (isNaN(spaceIndex) || spaceIndex < 0 || spaceIndex >= availableOptions.spaces.length) {
+          addLog(`> ${choice}`, 'input');
+          addLog(`Invalid choice. Please enter 1-${availableOptions.spaces.length}`, 'error');
+          return;
+        }
+        
+        const space = availableOptions.spaces[spaceIndex];
+        addLog(`> ${choice}`, 'input');
+        addLog(`✅ Selected space: ${space.name}`, 'success');
+        addLog('', 'info');
+        
+        // NEW: Ask about folder preference
+        addLog('Where should the new list be created?', 'info');
+        addLog('[1] Directly in space (folderless)', 'info');
+        addLog('[2] Inside an existing folder', 'info');
+        addLog('[3] Create new folder first', 'info');
+        addLog('', 'info');
+        
+        setInputPrompt('Enter choice (1-3): ');
+        setAvailableOptions({ 
+          ...availableOptions, 
+          mode: 'select_folder_option',
+          selectedSpace: space 
+        });
+        
+      } else if (availableOptions.mode === 'select_folder_option') {
+        const selectedSpace = availableOptions.selectedSpace;
+        
+        if (choice === '1') {
+          // Option 1: Create folderless list
+          addLog(`> ${choice}`, 'input');
+          addLog('✅ Creating folderless list...', 'info');
+          
+          // Create the updated template object
+          const updatedTemplate = {
+            ...template,
+            destination: { space_id: selectedSpace.id, space_name: selectedSpace.name }
+          };
+          
+          // Update state
+          setTemplate(updatedTemplate);
+          setWaitingForInput(false);
+          setUserInput('');
+          
+          // Pass the updated template directly to avoid timing issues
+          setTimeout(() => deployWithUpdatedTemplate(updatedTemplate), 500);
+          
+        } else if (choice === '2') {
+          // Option 2: Use existing folder
+          addLog(`> ${choice}`, 'input');
+          
+          fetchFoldersInSpace(selectedSpace.id).then(folders => {
+            if (folders.length === 0) {
+              addLog('❌ No folders found in this space', 'error');
+              addLog('💡 Try option 1 (folderless) or 3 (create new folder)', 'warning');
+              return;
+            }
+            
+            addLog('', 'info');
+            addLog('Select a folder:', 'info');
+            folders.forEach((folder: any, idx: number) => {
+              addLog(`[${idx + 1}] 📁 ${folder.name}`, 'info');
+            });
+            addLog('', 'info');
+            
+            setInputPrompt(`Select folder (1-${folders.length}): `);
+            setAvailableOptions({
+              ...availableOptions,
+              mode: 'select_existing_folder',
+              selectedSpace,
+              folders
+            });
+          });
+          
+        } else if (choice === '3') {
+          // Option 3: Create new folder
+          addLog(`> ${choice}`, 'input');
+          addLog('', 'info');
+          addLog('Enter name for new folder:', 'info');
+          
+          setInputPrompt('Folder name: ');
+          setAvailableOptions({
+            ...availableOptions,
+            mode: 'create_new_folder',
+            selectedSpace
+          });
+          
+        } else {
+          addLog(`> ${choice}`, 'input');
+          addLog('❌ Invalid choice. Please enter 1, 2, or 3', 'error');
+          return;
+        }
+        
+      } else if (availableOptions.mode === 'select_existing_folder') {
+        const folderIndex = parseInt(choice) - 1;
+        const folders = availableOptions.folders;
+        
+        if (isNaN(folderIndex) || folderIndex < 0 || folderIndex >= folders.length) {
+          addLog(`> ${choice}`, 'input');
+          addLog(`❌ Invalid choice. Please enter 1-${folders.length}`, 'error');
+          return;
+        }
+        
+        const folder = folders[folderIndex];
+        addLog(`> ${choice}`, 'input');
+        addLog(`✅ Selected folder: ${folder.name}`, 'success');
+        addLog('📋 Creating list in folder...', 'info');
+        
+        // Create the updated template object
+        const updatedTemplate = {
+          ...template,
+          destination: { 
+            folder_id: folder.id, 
+            folder_name: folder.name,
+            space_id: availableOptions.selectedSpace.id,
+            space_name: availableOptions.selectedSpace.name
+          }
+        };
+        
+        // Update state
+        setTemplate(updatedTemplate);
+        setWaitingForInput(false);
+        setUserInput('');
+        
+        // Pass the updated template directly to avoid timing issues
+        setTimeout(() => deployWithUpdatedTemplate(updatedTemplate), 500);
+        
+      } else if (availableOptions.mode === 'create_new_folder') {
+        const folderName = choice.trim();
+        
+        if (!folderName) {
+          addLog(`> ${choice}`, 'input');
+          addLog('❌ Folder name cannot be empty', 'error');
+          return;
+        }
+        
+        addLog(`> ${folderName}`, 'input');
+        
+        createNewFolder(availableOptions.selectedSpace.id, folderName).then(folder => {
+          if (folder) {
+            addLog('📋 Creating list in new folder...', 'info');
+            
+            // Create the updated template object
+            const updatedTemplate = {
+              ...template,
+              destination: { 
+                folder_id: folder.id, 
+                folder_name: folder.name,
+                space_id: availableOptions.selectedSpace.id,
+                space_name: availableOptions.selectedSpace.name
+              }
+            };
+            
+            // Update state
+            setTemplate(updatedTemplate);
+            setWaitingForInput(false);
+            setUserInput('');
+            
+            // Pass the updated template directly to avoid timing issues
+            setTimeout(() => deployWithUpdatedTemplate(updatedTemplate), 500);
+          } else {
+            addLog('💡 Try a different folder name or use option 1 (folderless)', 'warning');
+          }
+        });
+        
+      } else if (availableOptions.mode === 'select_list') {
+        const listIndex = parseInt(choice) - 1;
+        
+        // Input validation
+        if (isNaN(listIndex) || listIndex < 0 || listIndex >= availableOptions.lists.length) {
+          addLog(`> ${choice}`, 'input');
+          addLog(`Invalid choice. Please enter 1-${availableOptions.lists.length}`, 'error');
+          return;
+        }
+        
+        const list = availableOptions.lists[listIndex];
+        
+        // DEBUG: Log the list object structure
+        console.log('Selected list object:', list);
+        console.log('List ID:', list.id);
+        console.log('List keys:', Object.keys(list));
+        addLog(`🔍 Debug: List ID = ${list.id || 'undefined'}, Keys = ${Object.keys(list).join(', ')}`, 'info');
+        
+        addLog(`> ${choice}`, 'input');
+        addLog(`✅ Selected list: ${list.name}`, 'success');
+        
+        // Try multiple possible ID properties
+        const listId = list.id || list.listId || list.list_id || list._id;
+        
+        if (!listId) {
+          addLog('❌ Error: Could not find list ID in list object', 'error');
+          addLog(`Available properties: ${Object.keys(list).join(', ')}`, 'warning');
+          return;
+        }
+        
+        addLog(`🎯 Using list ID: ${listId}`, 'info');
+        
+        // Create the updated template object
+        const updatedTemplate = {
+          ...template,
+          destination: { 
+            list_id: listId,
+            list_name: list.name 
+          }
+        };
+        
+        // Update state
+        setTemplate(updatedTemplate);
+        setWaitingForInput(false);
+        setUserInput('');
+        
+        // Pass the updated template directly to avoid timing issues
+        setTimeout(() => deployWithUpdatedTemplate(updatedTemplate), 500);
+      }
+      
+      setUserInput('');
     }
   };
 
@@ -821,6 +1432,8 @@ export default function Home() {
                   className = 'text-purple-400';
                 } else if (log.includes('═')) {
                   className = 'text-gray-500';
+                } else if (log.includes('>')) {
+                  className = 'text-cyan-400';
                 }
                 
                 return (
@@ -829,6 +1442,28 @@ export default function Home() {
                   </div>
                 );
               })
+            )}
+            
+            {loadingClickUpStructure && (
+              <div className="flex items-center mt-2 text-blue-400">
+                <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mr-2"></div>
+                <span>Loading ClickUp structure...</span>
+              </div>
+            )}
+            
+            {waitingForInput && !loadingClickUpStructure && (
+              <div className="flex items-center mt-2">
+                <span className="text-green-400">{inputPrompt}</span>
+                <input
+                  type="text"
+                  value={userInput}
+                  onChange={(e) => setUserInput(e.target.value)}
+                  onKeyDown={handleTerminalInput}
+                  className="bg-transparent text-green-400 outline-none flex-1 ml-2"
+                  autoFocus
+                />
+                <span className="animate-pulse">_</span>
+              </div>
             )}
           </div>
         )}

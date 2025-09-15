@@ -66,3 +66,72 @@ export async function GET(request: NextRequest) {
     }, { status: 500 });
   }
 }
+
+export async function POST(request: NextRequest) {
+  try {
+    // Check if user is authenticated
+    const session = await auth();
+    if (!session?.user?.email) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const { apiToken, spaceId, getLists } = await request.json();
+
+    if (!apiToken) {
+      return NextResponse.json({ 
+        error: 'Missing required parameter: apiToken' 
+      }, { status: 400 });
+    }
+
+    // Create axios instance
+    const api = axios.create({
+      baseURL: 'https://api.clickup.com/api/v2',
+      headers: {
+        'Authorization': apiToken,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    // If getting lists for a specific space
+    if (spaceId && getLists) {
+      const listsRes = await api.get(`/space/${spaceId}/list`);
+      return NextResponse.json({ 
+        lists: listsRes.data.lists || [],
+        success: true 
+      });
+    }
+
+    // Get team first
+    const teamRes = await api.get('/team');
+    const teams = teamRes.data.teams;
+    
+    if (!teams || teams.length === 0) {
+      return NextResponse.json({ 
+        spaces: [],
+        success: true 
+      });
+    }
+
+    // Get all spaces
+    let allSpaces = [];
+    for (const team of teams) {
+      const spacesRes = await api.get(`/team/${team.id}/space`);
+      allSpaces.push(...(spacesRes.data.spaces || []));
+    }
+
+    return NextResponse.json({ 
+      spaces: allSpaces,
+      success: true 
+    });
+
+  } catch (error: any) {
+    console.error('Spaces API error:', error);
+    return NextResponse.json({ 
+      error: 'Failed to fetch spaces',
+      spaces: [],
+      lists: [],
+      success: false,
+      details: error.response?.data || error.message 
+    }, { status: 500 });
+  }
+}
