@@ -58,6 +58,7 @@ interface Action {
     title?: string;
     items: string[];
   };
+  actions?: Action[];  // ← Nested actions support!
 }
 
 export interface DeploymentResult {
@@ -384,7 +385,7 @@ export async function deployTemplateSmartly(
             // Add delay before creating action
             await rateLimitDelay(Math.floor(options.delayBetweenCalls! / 2));
             
-            // Create action as subtask
+            // Create action as subtask of phase
             const actionTask = await createTask(
               api,
               targetListId,
@@ -392,7 +393,6 @@ export async function deployTemplateSmartly(
                 name: action.name,
                 description: action.description || '',
                 parent: phaseTask.id, // Makes it a subtask
-                // Remove status - let ClickUp use the list's default status
                 priority: action.priority || 3,
                 tags: action.tags || [],
                 assignees: resolveAssignees(action.assignee_role, template.roles_map, userMap),
@@ -412,9 +412,100 @@ export async function deployTemplateSmartly(
               console.log(`  ✅ Created action: ${actionTask.name} - ⚠️ NO ASSIGNEE`);
             }
 
-            // Add watchers if specified
-            // Replace the watcher section in your code with this:
-            // Add watchers if specified
+            console.log(`  🔍 DEBUG: Checking for nested actions...`);
+            console.log(`  🔍 action.actions exists? ${!!action.actions}`);
+            console.log(`  🔍 action.actions is array? ${Array.isArray(action.actions)}`);
+            console.log(`  🔍 action.actions length: ${action.actions?.length || 0}`);
+            if (action.actions) {
+              console.log(`  🔍 First nested action name: ${action.actions[0]?.name || 'NONE'}`);
+            }
+
+
+            // ✨ HANDLE NESTED ACTIONS (SUB-SUBTASKS)
+            if (action.actions && action.actions.length > 0) {
+              console.log(`    📁 Creating ${action.actions.length} nested subtasks for "${action.name}"`);
+              
+              for (const subAction of action.actions) {
+                console.log(`      📦 Creating nested subtask: ${subAction.name}`);
+                
+                await rateLimitDelay(Math.floor(options.delayBetweenCalls! / 3));
+                
+                try {
+                  const subTask = await createTask(
+                    api,
+                    targetListId,
+                    {
+                      name: subAction.name,
+                      description: subAction.description || '',
+                      parent: actionTask.id,  // Parent is the action, not the phase!
+                      priority: subAction.priority || 3,
+                      tags: subAction.tags || [],
+                      assignees: resolveAssignees(subAction.assignee_role, template.roles_map, userMap),
+                      custom_fields: formatCustomFields(subAction.custom_fields, fieldValidation.fieldMap),
+                      due_date: subAction.due_date,
+                      start_date: subAction.start_date
+                    }
+                  );
+                  
+                  createdTaskIds.push(subTask.id);
+                  result.actions.push(subTask);
+                  
+                  console.log(`      ✅ Created nested subtask: ${subTask.name}`);
+                  
+                  // Handle checklist for nested subtask
+                  if (subAction.checklist && subAction.checklist.items?.length > 0) {
+                    await rateLimitDelay(300);
+                    const checklist = await createChecklist(
+                      api,
+                      subTask.id,
+                      subAction.checklist.title || 'Steps',
+                      subAction.checklist.items
+                    );
+                    createdChecklistIds.push(checklist.id);
+                    result.checklists.push(checklist);
+                    console.log(`        ✅ Created checklist with ${subAction.checklist.items.length} items`);
+                  }
+                  
+                  // Handle watchers for nested subtask
+                  if (subAction.watchers && subAction.watchers.length > 0) {
+                    console.log(`        👁 Adding watchers to nested subtask...`);
+                    const watcherIds: number[] = [];
+                    for (const watcherEmail of subAction.watchers) {
+                      const watcherId = userMap[watcherEmail];
+                      if (watcherId) {
+                        watcherIds.push(parseInt(watcherId));
+                      }
+                    }
+                    
+                    if (watcherIds.length > 0) {
+                      try {
+                        await rateLimitDelay(300);
+                        await api.put(`/task/${subTask.id}`, {
+                          watchers_add: watcherIds
+                        });
+                        console.log(`        ✅ Added ${watcherIds.length} watchers`);
+                      } catch (error: any) {
+                        console.log(`        ❌ Failed to add watchers: ${error.message}`);
+                      }
+                    }
+                  }
+                  
+                } catch (error: any) {
+                  const errorMessage = error.response?.status === 429 
+                    ? 'Rate limit exceeded - too many requests' 
+                    : error.message;
+                  result.errors.push(`Failed to create nested subtask "${subAction.name}": ${errorMessage}`);
+                  console.error(`      ❌ Failed to create nested subtask: ${errorMessage}`);
+                  
+                  if (error.response?.status === 429) {
+                    console.log('      ⏳ Rate limited - waiting 5 seconds...');
+                    await rateLimitDelay(5000);
+                  }
+                }
+              }
+            }
+
+            // Add watchers to main action
             if (action.watchers && action.watchers.length > 0) {
                 console.log(`  👁 Adding ${action.watchers.length} watchers...`);
                 
@@ -445,7 +536,7 @@ export async function deployTemplateSmartly(
                 }
             }
 
-            // Create checklist
+            // Create checklist for main action
             if (action.checklist && action.checklist.items?.length > 0) {
               await rateLimitDelay(300); // Delay for checklist
               const checklist = await createChecklist(
@@ -572,6 +663,12 @@ async function validateCustomFields(
       if (action.custom_fields) {
         Object.keys(action.custom_fields).forEach(name => requiredFields.add(name));
       }
+      // From nested actions (sub-subtasks)
+      action.actions?.forEach(subAction => {
+        if (subAction.custom_fields) {
+          Object.keys(subAction.custom_fields).forEach(name => requiredFields.add(name));
+        }
+      });
     });
   });
 
@@ -934,6 +1031,10 @@ async function ensureAllUsersHaveAccess(
   template.phases.forEach(phase => {
     phase.actions?.forEach(action => {
       action.watchers?.forEach(email => allEmails.add(email));
+      // Also check nested actions
+      action.actions?.forEach(subAction => {
+        subAction.watchers?.forEach(email => allEmails.add(email));
+      });
     });
   });
   
