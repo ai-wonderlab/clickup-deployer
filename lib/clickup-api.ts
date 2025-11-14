@@ -729,7 +729,7 @@ export async function deployTemplateSmartly(
     }
 
     // Step 6: Generate summary
-    result.success = result.phases.length > 0;
+    result.success = (result.phases.length > 0 || result.actions.length > 0);
     result.message = result.success
       ? `✅ Successfully deployed ${result.phases.length} phases, ${result.actions.length} actions, ${result.checklists.length} checklists to ${result.mode === 'new_list' ? 'NEW' : 'existing'} list`
       : '❌ Deployment failed - check errors';
