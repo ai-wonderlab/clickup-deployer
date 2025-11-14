@@ -84,6 +84,98 @@ async function rateLimitDelay(ms: number = 500): Promise<void> {
 }
 
 // ==========================================
+// MARKDOWN TO HTML CONVERTER FOR CLICKUP
+// ==========================================
+function convertMarkdownToClickUpHTML(markdown: string): string {
+  if (!markdown) return '';
+  
+  let html = markdown;
+  
+  // Convert bold: **text** → <strong>text</strong>
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  
+  // Convert bullet lists: * item → <li>item</li>
+  // First, find all bullet list blocks
+  const lines = html.split('\n');
+  const result: string[] = [];
+  let inList = false;
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmedLine = line.trim();
+    
+    // Check if this is a bullet point
+    if (trimmedLine.startsWith('* ')) {
+      if (!inList) {
+        result.push('<ul>');
+        inList = true;
+      }
+      // Remove the "* " and wrap in <li>
+      const content = trimmedLine.substring(2);
+      result.push(`<li>${content}</li>`);
+    } else {
+      // Not a bullet point
+      if (inList) {
+        result.push('</ul>');
+        inList = false;
+      }
+      result.push(line);
+    }
+  }
+  
+  // Close list if still open
+  if (inList) {
+    result.push('</ul>');
+  }
+  
+  html = result.join('\n');
+  
+  // Convert numbered lists: 1. item → <li>item</li> in <ol>
+  const numberedLines = html.split('\n');
+  const numberedResult: string[] = [];
+  let inNumberedList = false;
+  
+  for (let i = 0; i < numberedLines.length; i++) {
+    const line = numberedLines[i];
+    const trimmedLine = line.trim();
+    
+    // Check if this is a numbered item
+    if (/^\d+\.\s/.test(trimmedLine)) {
+      if (!inNumberedList) {
+        numberedResult.push('<ol>');
+        inNumberedList = true;
+      }
+      // Remove the number and wrap in <li>
+      const content = trimmedLine.replace(/^\d+\.\s/, '');
+      numberedResult.push(`<li>${content}</li>`);
+    } else {
+      if (inNumberedList) {
+        numberedResult.push('</ol>');
+        inNumberedList = false;
+      }
+      numberedResult.push(line);
+    }
+  }
+  
+  if (inNumberedList) {
+    numberedResult.push('</ol>');
+  }
+  
+  html = numberedResult.join('\n');
+  
+  // Convert horizontal rules: --- → <hr>
+  html = html.replace(/^---$/gm, '<hr>');
+  
+  // Convert double newlines to paragraphs breaks
+  html = html.replace(/\n\n/g, '<br><br>');
+  
+  // Convert single newlines to <br> (but not if already in HTML tags)
+  html = html.replace(/\n(?!<)/g, '<br>');
+  
+  return html;
+}
+
+// ==========================================
 // MAIN DEPLOYMENT FUNCTION
 // ==========================================
 export async function deployTemplateSmartly(
@@ -359,8 +451,10 @@ export async function deployTemplateSmartly(
             targetListId,
             {
               name: action.name,
-              description: action.description || '',
-              priority: action.priority || template.defaults?.priority || 3,
+              description: convertMarkdownToClickUpHTML(action.description || ''),
+              priority: action.priority !== undefined 
+                ? action.priority 
+                : (template.defaults?.priority !== undefined ? template.defaults.priority : undefined),
               tags: [...(template.defaults?.tags || []), ...(action.tags || [])],
               assignees: resolveAssignees(action.assignee_role, template.roles_map, userMap),
               custom_fields: mergeAndFormatCustomFields(
@@ -391,22 +485,22 @@ export async function deployTemplateSmartly(
               
               await rateLimitDelay(Math.floor(options.delayBetweenCalls! / 3));
               
-              try {
-                const subTask = await createTask(
-                  api,
-                  targetListId,
-                  {
-                    name: subAction.name,
-                    description: subAction.description || '',
-                    parent: actionTask.id,  // Parent is the action task
-                    priority: subAction.priority || 3,
-                    tags: subAction.tags || [],
-                    assignees: resolveAssignees(subAction.assignee_role, template.roles_map, userMap),
-                    custom_fields: formatCustomFields(subAction.custom_fields, fieldValidation.fieldMap),
-                    due_date: subAction.due_date,
-                    start_date: subAction.start_date
-                  }
-                );
+                try {
+                  const subTask = await createTask(
+                    api,
+                    targetListId,
+                    {
+                      name: subAction.name,
+                      description: convertMarkdownToClickUpHTML(subAction.description || ''),
+                      parent: actionTask.id,  // Parent is the action task
+                      priority: subAction.priority,
+                      tags: subAction.tags || [],
+                      assignees: resolveAssignees(subAction.assignee_role, template.roles_map, userMap),
+                      custom_fields: formatCustomFields(subAction.custom_fields, fieldValidation.fieldMap),
+                      due_date: subAction.due_date,
+                      start_date: subAction.start_date
+                    }
+                  );
                 
                 createdTaskIds.push(subTask.id);
                 result.actions.push(subTask);
@@ -494,9 +588,11 @@ export async function deployTemplateSmartly(
             targetListId,
             {
               name: phase.name,
-              description: phase.description || '',
+              description: convertMarkdownToClickUpHTML(phase.description || ''),
               // Remove status - let ClickUp use the list's default status
-              priority: phase.priority || template.defaults?.priority || 3,
+              priority: phase.priority !== undefined 
+                ? phase.priority 
+                : (template.defaults?.priority !== undefined ? template.defaults.priority : undefined),
               tags: [...(template.defaults?.tags || []), ...(phase.tags || [])],
               assignees: resolveAssignees(phase.assignee_role, template.roles_map, userMap),
               custom_fields: mergeAndFormatCustomFields(
@@ -533,9 +629,9 @@ export async function deployTemplateSmartly(
                 targetListId,
                 {
                   name: action.name,
-                  description: action.description || '',
+                  description: convertMarkdownToClickUpHTML(action.description || ''),
                   parent: phaseTask.id, // Makes it a subtask
-                  priority: action.priority || 3,
+                  priority: action.priority,
                   tags: action.tags || [],
                   assignees: resolveAssignees(action.assignee_role, template.roles_map, userMap),
                   custom_fields: formatCustomFields(action.custom_fields, fieldValidation.fieldMap),
@@ -569,9 +665,9 @@ export async function deployTemplateSmartly(
                       targetListId,
                       {
                         name: subAction.name,
-                        description: subAction.description || '',
+                        description: convertMarkdownToClickUpHTML(subAction.description || ''),
                         parent: actionTask.id,  // Parent is the action, not the phase!
-                        priority: subAction.priority || 3,
+                        priority: subAction.priority,
                         tags: subAction.tags || [],
                         assignees: resolveAssignees(subAction.assignee_role, template.roles_map, userMap),
                         custom_fields: formatCustomFields(subAction.custom_fields, fieldValidation.fieldMap),
@@ -1032,11 +1128,15 @@ async function createTask(
     name: taskData.name,
     description: taskData.description,
     status: taskData.status,
-    priority: taskData.priority,
     tags: taskData.tags,
     assignees: taskData.assignees,
     custom_fields: taskData.custom_fields
   };
+
+  // Only add priority if it's defined
+  if (taskData.priority !== undefined) {
+    payload.priority = taskData.priority;
+  }
 
   // Add parent if it's a subtask
   if (taskData.parent) {
