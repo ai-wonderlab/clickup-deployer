@@ -26,7 +26,8 @@ export interface TemplateSchema {
     custom_fields?: Record<string, any>;
   };
   roles_map?: Record<string, string>;
-  phases: Phase[];
+  phases?: Phase[];      // ← CHANGE: Make optional (add ?)
+  actions?: Action[];    // ← ADD: Direct actions support
 }
 
 interface Phase {
@@ -335,261 +336,396 @@ export async function deployTemplateSmartly(
     console.log('👥 Mapping team roles...');
     const userMap = await getTeamUserMap(api);
 
-    // Step 5: Deploy phases and actions
+    // Step 5: Deploy tasks
     console.log('🚀 Starting deployment...');
     console.log(`⏱️ Using ${options.delayBetweenCalls}ms delay between API calls to avoid rate limiting`);
     
-    for (const phase of template.phases || []) {
-      console.log(`📦 Creating phase: ${phase.name}`);
+    // Check deployment mode
+    if (template.actions && template.actions.length > 0) {
+      // ========================================
+      // DIRECT ACTIONS MODE (No Phase Wrapper)
+      // ========================================
+      console.log('📋 Direct actions mode - no phase wrapper');
       
-      try {
-        // Add delay before creating phase
-        await rateLimitDelay(options.delayBetweenCalls);
+      for (const action of template.actions) {
+        console.log(`📦 Creating action: ${action.name}`);
         
-        // Create phase task
-        const phaseTask = await createTask(
-          api,
-          targetListId,
-          {
-            name: phase.name,
-            description: phase.description || '',
-            // Remove status - let ClickUp use the list's default status
-            priority: phase.priority || template.defaults?.priority || 3,
-            tags: [...(template.defaults?.tags || []), ...(phase.tags || [])],
-            assignees: resolveAssignees(phase.assignee_role, template.roles_map, userMap),
-            custom_fields: mergeAndFormatCustomFields(
-              template.defaults?.custom_fields,
-              phase.custom_fields,
-              fieldValidation.fieldMap
-            ),
-            due_date: phase.due_date,
-            start_date: phase.start_date
-          }
-        );
-        
-        createdTaskIds.push(phaseTask.id);
-        result.phases.push(phaseTask);
-        
-        // Log assignee info
-        if (phaseTask.assignees?.length > 0) {
-          console.log(`✅ Created phase: ${phaseTask.name} (${phaseTask.id}) - Assigned to: ${phaseTask.assignees.map((a: any) => a.username || a.email || a.id).join(', ')}`);
-        } else {
-          console.log(`✅ Created phase: ${phaseTask.name} (${phaseTask.id}) - ⚠️ NO ASSIGNEE`);
-        }
-
-        // Create actions (subtasks)
-        for (const action of phase.actions || []) {
-          console.log(`  📦 Creating action: ${action.name}`);
+        try {
+          await rateLimitDelay(options.delayBetweenCalls);
           
-          try {
-            // Add delay before creating action
-            await rateLimitDelay(Math.floor(options.delayBetweenCalls! / 2));
-            
-            // Create action as subtask of phase
-            const actionTask = await createTask(
-              api,
-              targetListId,
-              {
-                name: action.name,
-                description: action.description || '',
-                parent: phaseTask.id, // Makes it a subtask
-                priority: action.priority || 3,
-                tags: action.tags || [],
-                assignees: resolveAssignees(action.assignee_role, template.roles_map, userMap),
-                custom_fields: formatCustomFields(action.custom_fields, fieldValidation.fieldMap),
-                due_date: action.due_date,
-                start_date: action.start_date
-              }
-            );
-            
-            createdTaskIds.push(actionTask.id);
-            result.actions.push(actionTask);
-            
-            // Log assignee info
-            if (actionTask.assignees?.length > 0) {
-              console.log(`  ✅ Created action: ${actionTask.name} - Assigned to: ${actionTask.assignees.map((a: any) => a.username || a.email || a.id).join(', ')}`);
-            } else {
-              console.log(`  ✅ Created action: ${actionTask.name} - ⚠️ NO ASSIGNEE`);
+          // Create action as TOP-LEVEL task (no parent)
+          const actionTask = await createTask(
+            api,
+            targetListId,
+            {
+              name: action.name,
+              description: action.description || '',
+              priority: action.priority || template.defaults?.priority || 3,
+              tags: [...(template.defaults?.tags || []), ...(action.tags || [])],
+              assignees: resolveAssignees(action.assignee_role, template.roles_map, userMap),
+              custom_fields: mergeAndFormatCustomFields(
+                template.defaults?.custom_fields,
+                action.custom_fields,
+                fieldValidation.fieldMap
+              ),
+              due_date: action.due_date,
+              start_date: action.start_date
             }
+          );
+          
+          createdTaskIds.push(actionTask.id);
+          result.actions.push(actionTask);
+          
+          if (actionTask.assignees?.length > 0) {
+            console.log(`✅ Created action: ${actionTask.name} (${actionTask.id}) - Assigned to: ${actionTask.assignees.map((a: any) => a.username || a.email || a.id).join(', ')}`);
+          } else {
+            console.log(`✅ Created action: ${actionTask.name} (${actionTask.id}) - ⚠️ NO ASSIGNEE`);
+          }
 
-            console.log(`  🔍 DEBUG: Checking for nested actions...`);
-            console.log(`  🔍 action.actions exists? ${!!action.actions}`);
-            console.log(`  🔍 action.actions is array? ${Array.isArray(action.actions)}`);
-            console.log(`  🔍 action.actions length: ${action.actions?.length || 0}`);
-            if (action.actions) {
-              console.log(`  🔍 First nested action name: ${action.actions[0]?.name || 'NONE'}`);
-            }
-
-
-            // ✨ HANDLE NESTED ACTIONS (SUB-SUBTASKS)
-            if (action.actions && action.actions.length > 0) {
-              console.log(`    📁 Creating ${action.actions.length} nested subtasks for "${action.name}"`);
+          // Handle NESTED ACTIONS (subtasks)
+          if (action.actions && action.actions.length > 0) {
+            console.log(`  📁 Creating ${action.actions.length} nested subtasks for "${action.name}"`);
+            
+            for (const subAction of action.actions) {
+              console.log(`    📦 Creating nested subtask: ${subAction.name}`);
               
-              for (const subAction of action.actions) {
-                console.log(`      📦 Creating nested subtask: ${subAction.name}`);
-                
-                await rateLimitDelay(Math.floor(options.delayBetweenCalls! / 3));
-                
-                try {
-                  const subTask = await createTask(
-                    api,
-                    targetListId,
-                    {
-                      name: subAction.name,
-                      description: subAction.description || '',
-                      parent: actionTask.id,  // Parent is the action, not the phase!
-                      priority: subAction.priority || 3,
-                      tags: subAction.tags || [],
-                      assignees: resolveAssignees(subAction.assignee_role, template.roles_map, userMap),
-                      custom_fields: formatCustomFields(subAction.custom_fields, fieldValidation.fieldMap),
-                      due_date: subAction.due_date,
-                      start_date: subAction.start_date
-                    }
-                  );
-                  
-                  createdTaskIds.push(subTask.id);
-                  result.actions.push(subTask);
-                  
-                  console.log(`      ✅ Created nested subtask: ${subTask.name}`);
-                  
-                  // Handle checklist for nested subtask
-                  if (subAction.checklist && subAction.checklist.items?.length > 0) {
-                    await rateLimitDelay(300);
-                    const checklist = await createChecklist(
-                      api,
-                      subTask.id,
-                      subAction.checklist.title || 'Steps',
-                      subAction.checklist.items
-                    );
-                    createdChecklistIds.push(checklist.id);
-                    result.checklists.push(checklist);
-                    console.log(`        ✅ Created checklist with ${subAction.checklist.items.length} items`);
+              await rateLimitDelay(Math.floor(options.delayBetweenCalls! / 3));
+              
+              try {
+                const subTask = await createTask(
+                  api,
+                  targetListId,
+                  {
+                    name: subAction.name,
+                    description: subAction.description || '',
+                    parent: actionTask.id,  // Parent is the action task
+                    priority: subAction.priority || 3,
+                    tags: subAction.tags || [],
+                    assignees: resolveAssignees(subAction.assignee_role, template.roles_map, userMap),
+                    custom_fields: formatCustomFields(subAction.custom_fields, fieldValidation.fieldMap),
+                    due_date: subAction.due_date,
+                    start_date: subAction.start_date
                   }
+                );
+                
+                createdTaskIds.push(subTask.id);
+                result.actions.push(subTask);
+                
+                console.log(`    ✅ Created nested subtask: ${subTask.name}`);
+                
+                // Handle checklist for nested subtask
+                if (subAction.checklist && subAction.checklist.items?.length > 0) {
+                  await rateLimitDelay(300);
+                  const checklist = await createChecklist(
+                    api,
+                    subTask.id,
+                    subAction.checklist.title || 'Steps',
+                    subAction.checklist.items
+                  );
+                  createdChecklistIds.push(checklist.id);
+                  result.checklists.push(checklist);
+                  console.log(`      ✅ Created checklist with ${subAction.checklist.items.length} items`);
+                }
+                
+              } catch (error: any) {
+                const errorMessage = error.response?.status === 429 
+                  ? 'Rate limit exceeded - too many requests' 
+                  : error.message;
+                result.errors.push(`Failed to create nested subtask "${subAction.name}": ${errorMessage}`);
+                console.error(`    ❌ Failed to create nested subtask: ${errorMessage}`);
+                
+                if (error.response?.status === 429) {
+                  console.log('    ⏳ Rate limited - waiting 5 seconds...');
+                  await rateLimitDelay(5000);
+                }
+              }
+            }
+          }
+
+          // Handle checklist for main action
+          if (action.checklist && action.checklist.items?.length > 0) {
+            await rateLimitDelay(300);
+            const checklist = await createChecklist(
+              api,
+              actionTask.id,
+              action.checklist.title || 'Steps',
+              action.checklist.items
+            );
+            createdChecklistIds.push(checklist.id);
+            result.checklists.push(checklist);
+            console.log(`  ✅ Created checklist with ${action.checklist.items.length} items`);
+          }
+
+        } catch (error: any) {
+          const errorMessage = error.response?.status === 429 
+            ? 'Rate limit exceeded - too many requests' 
+            : error.message;
+          result.errors.push(`Failed to create action "${action.name}": ${errorMessage}`);
+          console.error(`❌ Failed to create action: ${errorMessage}`);
+
+          if (options.enableRollback) {
+            await rollback();
+            throw error;
+          }
+
+          if (error.response?.status === 429) {
+            console.log('⏳ Rate limited - waiting 5 seconds...');
+            await rateLimitDelay(5000);
+          }
+        }
+      }
+      
+    } else if (template.phases && template.phases.length > 0) {
+      // ========================================
+      // PHASES MODE (Original Behavior)
+      // ========================================
+      console.log('📋 Phases mode - using phase wrapper');
+      
+      for (const phase of template.phases || []) {
+        console.log(`📦 Creating phase: ${phase.name}`);
+        
+        try {
+          // Add delay before creating phase
+          await rateLimitDelay(options.delayBetweenCalls);
+          
+          // Create phase task
+          const phaseTask = await createTask(
+            api,
+            targetListId,
+            {
+              name: phase.name,
+              description: phase.description || '',
+              // Remove status - let ClickUp use the list's default status
+              priority: phase.priority || template.defaults?.priority || 3,
+              tags: [...(template.defaults?.tags || []), ...(phase.tags || [])],
+              assignees: resolveAssignees(phase.assignee_role, template.roles_map, userMap),
+              custom_fields: mergeAndFormatCustomFields(
+                template.defaults?.custom_fields,
+                phase.custom_fields,
+                fieldValidation.fieldMap
+              ),
+              due_date: phase.due_date,
+              start_date: phase.start_date
+            }
+          );
+          
+          createdTaskIds.push(phaseTask.id);
+          result.phases.push(phaseTask);
+          
+          // Log assignee info
+          if (phaseTask.assignees?.length > 0) {
+            console.log(`✅ Created phase: ${phaseTask.name} (${phaseTask.id}) - Assigned to: ${phaseTask.assignees.map((a: any) => a.username || a.email || a.id).join(', ')}`);
+          } else {
+            console.log(`✅ Created phase: ${phaseTask.name} (${phaseTask.id}) - ⚠️ NO ASSIGNEE`);
+          }
+
+          // Create actions (subtasks)
+          for (const action of phase.actions || []) {
+            console.log(`  📦 Creating action: ${action.name}`);
+            
+            try {
+              // Add delay before creating action
+              await rateLimitDelay(Math.floor(options.delayBetweenCalls! / 2));
+              
+              // Create action as subtask of phase
+              const actionTask = await createTask(
+                api,
+                targetListId,
+                {
+                  name: action.name,
+                  description: action.description || '',
+                  parent: phaseTask.id, // Makes it a subtask
+                  priority: action.priority || 3,
+                  tags: action.tags || [],
+                  assignees: resolveAssignees(action.assignee_role, template.roles_map, userMap),
+                  custom_fields: formatCustomFields(action.custom_fields, fieldValidation.fieldMap),
+                  due_date: action.due_date,
+                  start_date: action.start_date
+                }
+              );
+              
+              createdTaskIds.push(actionTask.id);
+              result.actions.push(actionTask);
+              
+              // Log assignee info
+              if (actionTask.assignees?.length > 0) {
+                console.log(`  ✅ Created action: ${actionTask.name} - Assigned to: ${actionTask.assignees.map((a: any) => a.username || a.email || a.id).join(', ')}`);
+              } else {
+                console.log(`  ✅ Created action: ${actionTask.name} - ⚠️ NO ASSIGNEE`);
+              }
+
+              // ✨ HANDLE NESTED ACTIONS (SUB-SUBTASKS)
+              if (action.actions && action.actions.length > 0) {
+                console.log(`    📁 Creating ${action.actions.length} nested subtasks for "${action.name}"`);
+                
+                for (const subAction of action.actions) {
+                  console.log(`      📦 Creating nested subtask: ${subAction.name}`);
                   
-                  // Handle watchers for nested subtask
-                  if (subAction.watchers && subAction.watchers.length > 0) {
-                    console.log(`        👁 Adding watchers to nested subtask...`);
-                    const watcherIds: number[] = [];
-                    for (const watcherEmail of subAction.watchers) {
-                      const watcherId = userMap[watcherEmail];
-                      if (watcherId) {
-                        watcherIds.push(parseInt(watcherId));
+                  await rateLimitDelay(Math.floor(options.delayBetweenCalls! / 3));
+                  
+                  try {
+                    const subTask = await createTask(
+                      api,
+                      targetListId,
+                      {
+                        name: subAction.name,
+                        description: subAction.description || '',
+                        parent: actionTask.id,  // Parent is the action, not the phase!
+                        priority: subAction.priority || 3,
+                        tags: subAction.tags || [],
+                        assignees: resolveAssignees(subAction.assignee_role, template.roles_map, userMap),
+                        custom_fields: formatCustomFields(subAction.custom_fields, fieldValidation.fieldMap),
+                        due_date: subAction.due_date,
+                        start_date: subAction.start_date
+                      }
+                    );
+                    
+                    createdTaskIds.push(subTask.id);
+                    result.actions.push(subTask);
+                    
+                    console.log(`      ✅ Created nested subtask: ${subTask.name}`);
+                    
+                    // Handle checklist for nested subtask
+                    if (subAction.checklist && subAction.checklist.items?.length > 0) {
+                      await rateLimitDelay(300);
+                      const checklist = await createChecklist(
+                        api,
+                        subTask.id,
+                        subAction.checklist.title || 'Steps',
+                        subAction.checklist.items
+                      );
+                      createdChecklistIds.push(checklist.id);
+                      result.checklists.push(checklist);
+                      console.log(`        ✅ Created checklist with ${subAction.checklist.items.length} items`);
+                    }
+                    
+                    // Handle watchers for nested subtask
+                    if (subAction.watchers && subAction.watchers.length > 0) {
+                      console.log(`        👁 Adding watchers to nested subtask...`);
+                      const watcherIds: number[] = [];
+                      for (const watcherEmail of subAction.watchers) {
+                        const watcherId = userMap[watcherEmail];
+                        if (watcherId) {
+                          watcherIds.push(parseInt(watcherId));
+                        }
+                      }
+                      
+                      if (watcherIds.length > 0) {
+                        try {
+                          await rateLimitDelay(300);
+                          await api.put(`/task/${subTask.id}`, {
+                            watchers_add: watcherIds
+                          });
+                          console.log(`        ✅ Added ${watcherIds.length} watchers`);
+                        } catch (error: any) {
+                          console.log(`        ❌ Failed to add watchers: ${error.message}`);
+                        }
                       }
                     }
                     
-                    if (watcherIds.length > 0) {
-                      try {
-                        await rateLimitDelay(300);
-                        await api.put(`/task/${subTask.id}`, {
-                          watchers_add: watcherIds
-                        });
-                        console.log(`        ✅ Added ${watcherIds.length} watchers`);
-                      } catch (error: any) {
-                        console.log(`        ❌ Failed to add watchers: ${error.message}`);
-                      }
+                  } catch (error: any) {
+                    const errorMessage = error.response?.status === 429 
+                      ? 'Rate limit exceeded - too many requests' 
+                      : error.message;
+                    result.errors.push(`Failed to create nested subtask "${subAction.name}": ${errorMessage}`);
+                    console.error(`      ❌ Failed to create nested subtask: ${errorMessage}`);
+                    
+                    if (error.response?.status === 429) {
+                      console.log('      ⏳ Rate limited - waiting 5 seconds...');
+                      await rateLimitDelay(5000);
                     }
-                  }
-                  
-                } catch (error: any) {
-                  const errorMessage = error.response?.status === 429 
-                    ? 'Rate limit exceeded - too many requests' 
-                    : error.message;
-                  result.errors.push(`Failed to create nested subtask "${subAction.name}": ${errorMessage}`);
-                  console.error(`      ❌ Failed to create nested subtask: ${errorMessage}`);
-                  
-                  if (error.response?.status === 429) {
-                    console.log('      ⏳ Rate limited - waiting 5 seconds...');
-                    await rateLimitDelay(5000);
                   }
                 }
               }
-            }
 
-            // Add watchers to main action
-            if (action.watchers && action.watchers.length > 0) {
-                console.log(`  👁 Adding ${action.watchers.length} watchers...`);
-                
-                // Build array of watcher user IDs
-                const watcherIds: number[] = [];
-                for (const watcherEmail of action.watchers) {
-                const watcherId = userMap[watcherEmail];
-                if (watcherId) {
-                    watcherIds.push(parseInt(watcherId));
-                } else {
-                    console.log(`    ⚠️ Watcher ${watcherEmail} not found in team`);
-                }
-                }
-                
-                if (watcherIds.length > 0) {
-                try {
-                    await rateLimitDelay(300);
-                    // UPDATE the task with watchers
-                    const updateResponse = await api.put(`/task/${actionTask.id}`, {
-                    watchers_add: watcherIds  // or just "watchers": watcherIds
-                    });
-                    console.log(`    ✅ Added ${watcherIds.length} watchers to task`);
-                } catch (error: any) {
-                    const errorMessage = error.response?.data?.err || error.message;
-                    console.log(`    ❌ Failed to add watchers: ${errorMessage}`);
-                    result.warnings.push(`Could not add watchers: ${errorMessage}`);
-                }
-                }
-            }
+              // Add watchers to main action
+              if (action.watchers && action.watchers.length > 0) {
+                  console.log(`  👁 Adding ${action.watchers.length} watchers...`);
+                  
+                  // Build array of watcher user IDs
+                  const watcherIds: number[] = [];
+                  for (const watcherEmail of action.watchers) {
+                  const watcherId = userMap[watcherEmail];
+                  if (watcherId) {
+                      watcherIds.push(parseInt(watcherId));
+                  } else {
+                      console.log(`    ⚠️ Watcher ${watcherEmail} not found in team`);
+                  }
+                  }
+                  
+                  if (watcherIds.length > 0) {
+                  try {
+                      await rateLimitDelay(300);
+                      // UPDATE the task with watchers
+                      const updateResponse = await api.put(`/task/${actionTask.id}`, {
+                      watchers_add: watcherIds  // or just "watchers": watcherIds
+                      });
+                      console.log(`    ✅ Added ${watcherIds.length} watchers to task`);
+                  } catch (error: any) {
+                      const errorMessage = error.response?.data?.err || error.message;
+                      console.log(`    ❌ Failed to add watchers: ${errorMessage}`);
+                      result.warnings.push(`Could not add watchers: ${errorMessage}`);
+                  }
+                  }
+              }
 
-            // Create checklist for main action
-            if (action.checklist && action.checklist.items?.length > 0) {
-              await rateLimitDelay(300); // Delay for checklist
-              const checklist = await createChecklist(
-                api,
-                actionTask.id,
-                action.checklist.title || 'Steps',
-                action.checklist.items
-              );
-              createdChecklistIds.push(checklist.id);
-              result.checklists.push(checklist);
-              console.log(`    ✅ Created checklist with ${action.checklist.items.length} items`);
-            }
+              // Create checklist for main action
+              if (action.checklist && action.checklist.items?.length > 0) {
+                await rateLimitDelay(300); // Delay for checklist
+                const checklist = await createChecklist(
+                  api,
+                  actionTask.id,
+                  action.checklist.title || 'Steps',
+                  action.checklist.items
+                );
+                createdChecklistIds.push(checklist.id);
+                result.checklists.push(checklist);
+                console.log(`    ✅ Created checklist with ${action.checklist.items.length} items`);
+              }
 
-          } catch (error: any) {
-            const errorMessage = error.response?.status === 429 
-              ? 'Rate limit exceeded - too many requests' 
-              : error.message;
-            result.errors.push(`Failed to create action "${action.name}": ${errorMessage}`);
-            console.error(`  ❌ Failed to create action: ${errorMessage}`);
+            } catch (error: any) {
+              const errorMessage = error.response?.status === 429 
+                ? 'Rate limit exceeded - too many requests' 
+                : error.message;
+              result.errors.push(`Failed to create action "${action.name}": ${errorMessage}`);
+              console.error(`  ❌ Failed to create action: ${errorMessage}`);
 
-            // ADD ROLLBACK:
-            if (options.enableRollback) {
-                await rollback();
-                throw error; // Stop deployment
-            }
+              // ADD ROLLBACK:
+              if (options.enableRollback) {
+                  await rollback();
+                  throw error; // Stop deployment
+              }
 
-            // If rate limited, wait longer before continuing
-            if (error.response?.status === 429) {
-              console.log('  ⏳ Rate limited - waiting 5 seconds before continuing...');
-              await rateLimitDelay(5000);
+              // If rate limited, wait longer before continuing
+              if (error.response?.status === 429) {
+                console.log('  ⏳ Rate limited - waiting 5 seconds before continuing...');
+                await rateLimitDelay(5000);
+              }
             }
           }
-        }
 
-      } catch (error: any) {
-        const errorMessage = error.response?.status === 429 
-          ? 'Rate limit exceeded - too many requests' 
-          : error.message;
-        result.errors.push(`Failed to create phase "${phase.name}": ${errorMessage}`);
-        console.error(`❌ Failed to create phase: ${errorMessage}`);
-        
-        // ADD ROLLBACK:
-        if (options.enableRollback) {
-            await rollback();
-            throw error; // Stop deployment
+        } catch (error: any) {
+          const errorMessage = error.response?.status === 429 
+            ? 'Rate limit exceeded - too many requests' 
+            : error.message;
+          result.errors.push(`Failed to create phase "${phase.name}": ${errorMessage}`);
+          console.error(`❌ Failed to create phase: ${errorMessage}`);
+          
+          // ADD ROLLBACK:
+          if (options.enableRollback) {
+              await rollback();
+              throw error; // Stop deployment
+            }
+
+          // If rate limited, wait longer before continuing
+          if (error.response?.status === 429) {
+            console.log('⏳ Rate limited - waiting 5 seconds before continuing...');
+            await rateLimitDelay(5000);
           }
-
-        // If rate limited, wait longer before continuing
-        if (error.response?.status === 429) {
-          console.log('⏳ Rate limited - waiting 5 seconds before continuing...');
-          await rateLimitDelay(5000);
         }
       }
+    } else {
+      throw new Error('Template must have either "phases" or "actions" array');
     }
 
     // Step 6: Generate summary
@@ -654,7 +790,7 @@ async function validateCustomFields(
   }
   
   // From phases
-  template.phases.forEach(phase => {
+  template.phases?.forEach(phase => {
     if (phase.custom_fields) {
       Object.keys(phase.custom_fields).forEach(name => requiredFields.add(name));
     }
@@ -669,6 +805,19 @@ async function validateCustomFields(
           Object.keys(subAction.custom_fields).forEach(name => requiredFields.add(name));
         }
       });
+    });
+  });
+
+  // From direct actions (no phases)
+  template.actions?.forEach(action => {
+    if (action.custom_fields) {
+      Object.keys(action.custom_fields).forEach(name => requiredFields.add(name));
+    }
+    // From nested actions
+    action.actions?.forEach(subAction => {
+      if (subAction.custom_fields) {
+        Object.keys(subAction.custom_fields).forEach(name => requiredFields.add(name));
+      }
     });
   });
 
@@ -1028,13 +1177,22 @@ async function ensureAllUsersHaveAccess(
     Object.values(template.roles_map).forEach(email => allEmails.add(email));
   }
   
-  template.phases.forEach(phase => {
+  template.phases?.forEach(phase => {
     phase.actions?.forEach(action => {
       action.watchers?.forEach(email => allEmails.add(email));
       // Also check nested actions
       action.actions?.forEach(subAction => {
         subAction.watchers?.forEach(email => allEmails.add(email));
       });
+    });
+  });
+
+  // From direct actions (no phases)
+  template.actions?.forEach(action => {
+    action.watchers?.forEach(email => allEmails.add(email));
+    // Also check nested actions
+    action.actions?.forEach(subAction => {
+      subAction.watchers?.forEach(email => allEmails.add(email));
     });
   });
   
