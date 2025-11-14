@@ -84,98 +84,6 @@ async function rateLimitDelay(ms: number = 500): Promise<void> {
 }
 
 // ==========================================
-// MARKDOWN TO HTML CONVERTER FOR CLICKUP
-// ==========================================
-function convertMarkdownToClickUpHTML(markdown: string): string {
-  if (!markdown) return '';
-  
-  let html = markdown;
-  
-  // Convert bold: **text** → <strong>text</strong>
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  
-  // Convert bullet lists: * item → <li>item</li>
-  // First, find all bullet list blocks
-  const lines = html.split('\n');
-  const result: string[] = [];
-  let inList = false;
-  
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const trimmedLine = line.trim();
-    
-    // Check if this is a bullet point
-    if (trimmedLine.startsWith('* ')) {
-      if (!inList) {
-        result.push('<ul>');
-        inList = true;
-      }
-      // Remove the "* " and wrap in <li>
-      const content = trimmedLine.substring(2);
-      result.push(`<li>${content}</li>`);
-    } else {
-      // Not a bullet point
-      if (inList) {
-        result.push('</ul>');
-        inList = false;
-      }
-      result.push(line);
-    }
-  }
-  
-  // Close list if still open
-  if (inList) {
-    result.push('</ul>');
-  }
-  
-  html = result.join('\n');
-  
-  // Convert numbered lists: 1. item → <li>item</li> in <ol>
-  const numberedLines = html.split('\n');
-  const numberedResult: string[] = [];
-  let inNumberedList = false;
-  
-  for (let i = 0; i < numberedLines.length; i++) {
-    const line = numberedLines[i];
-    const trimmedLine = line.trim();
-    
-    // Check if this is a numbered item
-    if (/^\d+\.\s/.test(trimmedLine)) {
-      if (!inNumberedList) {
-        numberedResult.push('<ol>');
-        inNumberedList = true;
-      }
-      // Remove the number and wrap in <li>
-      const content = trimmedLine.replace(/^\d+\.\s/, '');
-      numberedResult.push(`<li>${content}</li>`);
-    } else {
-      if (inNumberedList) {
-        numberedResult.push('</ol>');
-        inNumberedList = false;
-      }
-      numberedResult.push(line);
-    }
-  }
-  
-  if (inNumberedList) {
-    numberedResult.push('</ol>');
-  }
-  
-  html = numberedResult.join('\n');
-  
-  // Convert horizontal rules: --- → <hr>
-  html = html.replace(/^---$/gm, '<hr>');
-  
-  // Convert double newlines to paragraphs breaks
-  html = html.replace(/\n\n/g, '<br><br>');
-  
-  // Convert single newlines to <br> (but not if already in HTML tags)
-  html = html.replace(/\n(?!<)/g, '<br>');
-  
-  return html;
-}
-
-// ==========================================
 // MAIN DEPLOYMENT FUNCTION
 // ==========================================
 export async function deployTemplateSmartly(
@@ -451,7 +359,7 @@ export async function deployTemplateSmartly(
             targetListId,
             {
               name: action.name,
-              description: convertMarkdownToClickUpHTML(action.description || ''),
+              description: action.description || '',
               priority: action.priority !== undefined 
                 ? action.priority 
                 : (template.defaults?.priority !== undefined ? template.defaults.priority : undefined),
@@ -491,7 +399,7 @@ export async function deployTemplateSmartly(
                     targetListId,
                     {
                       name: subAction.name,
-                      description: convertMarkdownToClickUpHTML(subAction.description || ''),
+                      description: subAction.description || '',
                       parent: actionTask.id,  // Parent is the action task
                       priority: subAction.priority,
                       tags: subAction.tags || [],
@@ -588,7 +496,7 @@ export async function deployTemplateSmartly(
             targetListId,
             {
               name: phase.name,
-              description: convertMarkdownToClickUpHTML(phase.description || ''),
+              description: phase.description || '',
               // Remove status - let ClickUp use the list's default status
               priority: phase.priority !== undefined 
                 ? phase.priority 
@@ -629,7 +537,7 @@ export async function deployTemplateSmartly(
                 targetListId,
                 {
                   name: action.name,
-                  description: convertMarkdownToClickUpHTML(action.description || ''),
+                  description: action.description || '',
                   parent: phaseTask.id, // Makes it a subtask
                   priority: action.priority,
                   tags: action.tags || [],
@@ -665,7 +573,7 @@ export async function deployTemplateSmartly(
                       targetListId,
                       {
                         name: subAction.name,
-                        description: convertMarkdownToClickUpHTML(subAction.description || ''),
+                        description: subAction.description || '',
                         parent: actionTask.id,  // Parent is the action, not the phase!
                         priority: subAction.priority,
                         tags: subAction.tags || [],
@@ -1126,7 +1034,7 @@ async function createTask(
   
   const payload: any = {
     name: taskData.name,
-    description: taskData.description,
+    markdown_description: taskData.description,
     status: taskData.status,
     tags: taskData.tags,
     assignees: taskData.assignees,
